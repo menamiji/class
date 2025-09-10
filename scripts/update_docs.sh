@@ -78,3 +78,4 @@ echo -e "   - 백업 위치: docs/obsidian_backup/"
 
 echo ""
 echo -e "${GREEN}✨ AI 문서 업데이트 완료!${NC}"
+
