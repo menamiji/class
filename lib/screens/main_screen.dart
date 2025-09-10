@@ -30,7 +30,8 @@ class _MainScreenState extends State<MainScreen> {
       jwt: jwt,
     );
 
-    _loadSubmissions();
+    // 백엔드 API가 구현될 때까지 임시 비활성화
+    // _loadSubmissions();
   }
 
   Future<void> _loadSubmissions() async {
@@ -125,11 +126,11 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   Future<void> _signOut() async {
-    await AuthService.signOut();
-    if (mounted) {
-      Navigator.of(
-        context,
-      ).pushReplacement(MaterialPageRoute(builder: (_) => const LoginScreen()));
+    try {
+      // StreamBuilder가 자동으로 처리하므로 직접 네비게이션하지 않음
+      await AuthService.signOut();
+    } catch (e) {
+      debugPrint('로그아웃 오류: $e');
     }
   }
 

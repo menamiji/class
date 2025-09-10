@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'services/auth_service.dart';
+import 'services/user_service.dart';
 import 'screens/login_screen.dart';
 import 'screens/main_screen.dart';
+import 'screens/admin_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -26,18 +28,7 @@ class MyApp extends StatefulWidget {
 }
 
 class _MyAppState extends State<MyApp> {
-  @override
-  void initState() {
-    super.initState();
-    // 인증 상태 변화 감지
-    AuthService.authStateStream.listen((data) {
-      if (mounted) {
-        setState(() {
-          // 인증 상태가 변경되면 UI를 다시 빌드
-        });
-      }
-    });
-  }
+  // 인증 상태를 직접 관리하지 않고 StreamBuilder 사용
 
   @override
   Widget build(BuildContext context) {
@@ -47,7 +38,79 @@ class _MyAppState extends State<MyApp> {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
         useMaterial3: true,
       ),
-      home: AuthService.isLoggedIn ? const MainScreen() : const LoginScreen(),
+      home: StreamBuilder<AuthState>(
+        stream: AuthService.authStateStream,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Scaffold(
+              body: Center(child: CircularProgressIndicator()),
+            );
+          }
+
+          final session = snapshot.data?.session;
+          if (session != null) {
+            return const RoleBasedScreen();
+          } else {
+            return const LoginScreen();
+          }
+        },
+      ),
     );
+  }
+}
+
+class RoleBasedScreen extends StatefulWidget {
+  const RoleBasedScreen({super.key});
+
+  @override
+  State<RoleBasedScreen> createState() => _RoleBasedScreenState();
+}
+
+class _RoleBasedScreenState extends State<RoleBasedScreen> {
+  bool _isLoading = true;
+  bool _isAdmin = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkUserRole();
+  }
+
+  Future<void> _checkUserRole() async {
+    try {
+      final isAdmin = await UserService.isAdmin();
+      if (mounted) {
+        setState(() {
+          _isAdmin = isAdmin;
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isLoading) {
+      return const Scaffold(
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              CircularProgressIndicator(),
+              SizedBox(height: 16),
+              Text('사용자 권한을 확인하는 중...'),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return _isAdmin ? const AdminScreen() : const MainScreen();
   }
 }
