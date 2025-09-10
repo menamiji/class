@@ -30,16 +30,33 @@ class AuthService {
   /// Google OAuth 로그인
   static Future<bool> signInWithGoogle() async {
     try {
-      // 개발 환경에서는 localhost, 운영 환경에서는 실제 도메인 사용
-      final redirectUrl = kDebugMode
-          ? null // localhost에서는 기본 리디렉션 사용
-          : 'https://info.pocheonil.hs.kr/class/';
+      // 웹 환경에서는 현재 페이지(서브패스 포함)로 리디렉션,
+      // 그 외(모바일/데스크톱)에서는 운영 도메인 사용
+      String? redirectUrl;
+      if (kIsWeb) {
+        final current = Uri
+            .base; // e.g., https://info.pocheonil.hs.kr/class/ or http://localhost:5173/
+        final base = '${current.origin}${current.path}';
+        redirectUrl = base.endsWith('/') ? base : '$base/';
+      } else if (!kDebugMode) {
+        redirectUrl = 'https://info.pocheonil.hs.kr/class/';
+      }
 
-      await _supabase.auth.signInWithOAuth(
-        OAuthProvider.google,
-        redirectTo: redirectUrl,
-      );
-      return true;
+      if (kIsWeb) {
+        // 웹 환경에서는 리디렉션이 발생하므로 바로 성공으로 처리
+        _supabase.auth.signInWithOAuth(
+          OAuthProvider.google,
+          redirectTo: redirectUrl,
+        );
+        return true;
+      } else {
+        // 모바일/데스크톱 환경에서는 응답을 기다림
+        await _supabase.auth.signInWithOAuth(
+          OAuthProvider.google,
+          redirectTo: redirectUrl,
+        );
+        return true;
+      }
     } catch (e) {
       debugPrint('Google 로그인 오류: $e');
       return false;
