@@ -30,9 +30,14 @@ class AuthService {
   /// Google OAuth 로그인
   static Future<bool> signInWithGoogle() async {
     try {
+      // 개발 환경에서는 localhost, 운영 환경에서는 실제 도메인 사용
+      final redirectUrl = kDebugMode
+          ? null // localhost에서는 기본 리디렉션 사용
+          : 'https://info.pocheonil.hs.kr/class/';
+
       await _supabase.auth.signInWithOAuth(
         OAuthProvider.google,
-        redirectTo: 'https://info.pocheonil.hs.kr/class/',
+        redirectTo: redirectUrl,
       );
       return true;
     } catch (e) {
