@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/auth_service.dart';
 import '../services/user_service.dart';
-import 'login_screen.dart';
 
 class AdminScreen extends StatefulWidget {
   const AdminScreen({super.key});
@@ -119,9 +119,87 @@ class SubjectManagementTab extends StatefulWidget {
 }
 
 class _SubjectManagementTabState extends State<SubjectManagementTab> {
-  final List<Map<String, dynamic>> _subjects = [
-    {'id': '1', 'name': '정보처리와 관리', 'is_enabled': true, 'order_index': 1},
-  ];
+  final _supabase = Supabase.instance.client;
+  List<Map<String, dynamic>> _subjects = [];
+  bool _isLoading = true;
+
+  final _addSubjectController = TextEditingController();
+  final _editSubjectController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSubjects();
+  }
+
+  @override
+  void dispose() {
+    _addSubjectController.dispose();
+    _editSubjectController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadSubjects() async {
+    debugPrint('🔍 DEBUG: Supabase에서 과목 데이터 로드 시도...');
+    try {
+      final response = await _supabase
+          .from('subjects')
+          .select('*')
+          .order('order_index', ascending: true);
+
+      debugPrint('🔍 DEBUG: Supabase 응답: $response');
+
+      setState(() {
+        _subjects = List<Map<String, dynamic>>.from(response);
+        _isLoading = false;
+      });
+      debugPrint('🔍 DEBUG: 로드된 과목 수: ${_subjects.length}');
+
+      // 테이블이 비어있으면 기본 데이터 추가 시도
+      if (_subjects.isEmpty) {
+        debugPrint('🔍 DEBUG: 테이블이 비어있음. 기본 데이터 추가 시도...');
+        await _createDefaultSubject();
+      }
+    } catch (e) {
+      debugPrint('🔍 DEBUG: Supabase 로드 오류: $e');
+      // RLS 정책 문제나 테이블 없음 - 기본값으로 폴백하되 상태는 로딩 완료로 설정
+      setState(() {
+        _subjects = []; // 빈 배열로 시작
+        _isLoading = false;
+      });
+
+      // 사용자에게 RLS 설정 필요 알림
+      if (e.toString().contains('row-level security policy') ||
+          e.toString().contains('42501')) {
+        debugPrint('🚨 DEBUG: RLS 정책 문제 - Supabase 대시보드에서 정책 설정 필요');
+      }
+    }
+  }
+
+  Future<void> _createDefaultSubject() async {
+    try {
+      final defaultSubject = {
+        'name': '정보처리와 관리',
+        'is_enabled': true,
+        'order_index': 1,
+      };
+
+      debugPrint('🔍 DEBUG: 기본 과목 생성 시도: $defaultSubject');
+      final response = await _supabase
+          .from('subjects')
+          .insert(defaultSubject)
+          .select()
+          .single();
+
+      debugPrint('🔍 DEBUG: 기본 과목 생성 성공: $response');
+
+      setState(() {
+        _subjects = [response];
+      });
+    } catch (e) {
+      debugPrint('🔍 DEBUG: 기본 과목 생성 실패: $e');
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -169,11 +247,8 @@ class _SubjectManagementTabState extends State<SubjectManagementTab> {
                       children: [
                         Switch(
                           value: subject['is_enabled'],
-                          onChanged: (value) {
-                            setState(() {
-                              subject['is_enabled'] = value;
-                            });
-                          },
+                          onChanged: (value) =>
+                              _toggleSubjectEnabled(subject, value),
                         ),
                         PopupMenuButton(
                           itemBuilder: (context) => [
@@ -207,15 +282,22 @@ class _SubjectManagementTabState extends State<SubjectManagementTab> {
   }
 
   void _addSubject() {
+    debugPrint('🔧 DEBUG: _addSubject() 호출됨');
+    _addSubjectController.clear(); // 입력 필드 초기화
+
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('과목 추가'),
-        content: const TextField(
-          decoration: InputDecoration(
+        content: TextField(
+          controller: _addSubjectController,
+          decoration: const InputDecoration(
             labelText: '과목명',
             border: OutlineInputBorder(),
+            hintText: '예: 정보처리와관리',
           ),
+          autofocus: true,
+          onSubmitted: (_) => _performAddSubject(),
         ),
         actions: [
           TextButton(
@@ -223,10 +305,7 @@ class _SubjectManagementTabState extends State<SubjectManagementTab> {
             child: const Text('취소'),
           ),
           ElevatedButton(
-            onPressed: () {
-              // TODO: 과목 추가 로직
-              Navigator.pop(context);
-            },
+            onPressed: _performAddSubject,
             child: const Text('추가'),
           ),
         ],
@@ -234,17 +313,163 @@ class _SubjectManagementTabState extends State<SubjectManagementTab> {
     );
   }
 
+  Future<void> _performAddSubject() async {
+    final subjectName = _addSubjectController.text.trim();
+    debugPrint('🔧 DEBUG: _performAddSubject() 호출됨 - 입력값: "$subjectName"');
+
+    if (subjectName.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('과목명을 입력해주세요.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    // 중복 체크
+    if (_subjects.any((subject) => subject['name'] == subjectName)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('이미 존재하는 과목입니다.'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    Navigator.pop(context);
+
+    try {
+      // Supabase에 새 과목 저장 시도
+      final newOrderIndex = _subjects.length + 1;
+      final newSubject = {
+        'name': subjectName,
+        'is_enabled': true,
+        'order_index': newOrderIndex,
+      };
+
+      debugPrint('🔧 DEBUG: Supabase에 저장 시도: $newSubject');
+      final response = await _supabase
+          .from('subjects')
+          .insert(newSubject)
+          .select()
+          .single();
+
+      debugPrint('🔧 DEBUG: Supabase 저장 성공: $response');
+
+      // 로컬 상태 업데이트
+      setState(() {
+        _subjects.add(response);
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('✅ 과목 "$subjectName"이 Supabase에 저장되었습니다!'),
+          backgroundColor: Colors.green,
+        ),
+      );
+
+      debugPrint('🔧 DEBUG: 과목 추가 완료: $subjectName, 총 개수: ${_subjects.length}');
+    } catch (e) {
+      debugPrint('🔧 DEBUG: Supabase 저장 오류: $e');
+
+      String errorMessage = '데이터베이스 저장 실패';
+      Color messageColor = Colors.red;
+
+      if (e.toString().contains('row-level security policy') ||
+          e.toString().contains('42501')) {
+        errorMessage = '🚨 RLS 정책 문제!\nSupabase 대시보드에서 관리자 정책을 추가해주세요.';
+        messageColor = Colors.orange;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('❌ $errorMessage\n과목: "$subjectName"'),
+          backgroundColor: messageColor,
+          duration: const Duration(seconds: 5),
+        ),
+      );
+    }
+  }
+
+  Future<void> _toggleSubjectEnabled(
+    Map<String, dynamic> subject,
+    bool newValue,
+  ) async {
+    debugPrint('🔥 TOGGLE DEBUG: 시작');
+    debugPrint('🔥 TOGGLE DEBUG: subject = $subject');
+    debugPrint('🔥 TOGGLE DEBUG: newValue = $newValue');
+    debugPrint('🔥 TOGGLE DEBUG: subject_id = ${subject["id"]}');
+    debugPrint(
+      '🔥 TOGGLE DEBUG: subject_id_type = ${subject["id"].runtimeType}',
+    );
+
+    try {
+      // Supabase에 업데이트
+      debugPrint('🔥 TOGGLE DEBUG: Supabase 업데이트 시도...');
+      final result = await _supabase
+          .from('subjects')
+          .update({'is_enabled': newValue})
+          .eq('id', subject['id']);
+
+      debugPrint('🔥 TOGGLE DEBUG: Supabase 응답: $result');
+      debugPrint('🔥 TOGGLE DEBUG: 업데이트 성공!');
+
+      // 로컬 상태 업데이트
+      setState(() {
+        subject['is_enabled'] = newValue;
+      });
+
+      // 성공 메시지
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '✅ "${subject["name"]}" ${newValue ? "활성화" : "비활성화"}되었습니다!',
+          ),
+          backgroundColor: newValue ? Colors.green : Colors.orange,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+
+      debugPrint('🔧 DEBUG: 활성화 상태 변경 완료: ${subject["name"]} = $newValue');
+    } catch (e) {
+      debugPrint('🔥 TOGGLE DEBUG: 오류 발생!');
+      debugPrint('🔥 TOGGLE DEBUG: 오류 타입: ${e.runtimeType}');
+      debugPrint('🔥 TOGGLE DEBUG: 오류 내용: $e');
+      debugPrint('🔥 TOGGLE DEBUG: 오류 문자열: ${e.toString()}');
+
+      String errorMessage = '데이터베이스 업데이트 실패';
+      if (e.toString().contains('row-level security policy') ||
+          e.toString().contains('42501')) {
+        errorMessage = '🚨 RLS 정책 문제!\nSupabase 대시보드에서 관리자 정책을 추가해주세요.';
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('❌ $errorMessage\n과목: "${subject["name"]}"'),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 4),
+        ),
+      );
+    }
+  }
+
   void _editSubject(Map<String, dynamic> subject) {
+    _editSubjectController.text = subject['name'];
+
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('과목 수정'),
         content: TextField(
+          controller: _editSubjectController,
           decoration: const InputDecoration(
             labelText: '과목명',
             border: OutlineInputBorder(),
           ),
-          controller: TextEditingController(text: subject['name']),
+          autofocus: true,
+          onSubmitted: (_) => _performEditSubject(subject),
         ),
         actions: [
           TextButton(
@@ -252,15 +477,96 @@ class _SubjectManagementTabState extends State<SubjectManagementTab> {
             child: const Text('취소'),
           ),
           ElevatedButton(
-            onPressed: () {
-              // TODO: 과목 수정 로직
-              Navigator.pop(context);
-            },
+            onPressed: () => _performEditSubject(subject),
             child: const Text('수정'),
           ),
         ],
       ),
     );
+  }
+
+  Future<void> _performEditSubject(Map<String, dynamic> subject) async {
+    final newSubjectName = _editSubjectController.text.trim();
+    final originalName = subject['name'];
+
+    if (newSubjectName.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('과목명을 입력해주세요.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    // 변경사항이 없는 경우
+    if (newSubjectName == originalName) {
+      Navigator.pop(context);
+      return;
+    }
+
+    // 중복 체크 (자신 제외)
+    if (_subjects.any(
+      (s) => s['id'] != subject['id'] && s['name'] == newSubjectName,
+    )) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('이미 존재하는 과목입니다.'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    Navigator.pop(context);
+
+    try {
+      // Supabase에 업데이트
+      debugPrint(
+        '🔧 DEBUG: Supabase에 과목명 업데이트 시도: $originalName → $newSubjectName',
+      );
+      await _supabase
+          .from('subjects')
+          .update({'name': newSubjectName})
+          .eq('id', subject['id']);
+
+      debugPrint('🔧 DEBUG: Supabase 과목명 업데이트 성공');
+
+      // 로컬 상태 업데이트
+      setState(() {
+        final index = _subjects.indexWhere((s) => s['id'] == subject['id']);
+        if (index != -1) {
+          _subjects[index]['name'] = newSubjectName;
+        }
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('✅ 과목이 "$newSubjectName"으로 Supabase에 저장되었습니다!'),
+          backgroundColor: Colors.green,
+        ),
+      );
+
+      debugPrint('🔧 DEBUG: 과목명 수정 완료: $originalName → $newSubjectName');
+    } catch (e) {
+      debugPrint('🔧 DEBUG: Supabase 과목명 업데이트 실패: $e');
+
+      String errorMessage = '데이터베이스 업데이트 실패';
+      if (e.toString().contains('row-level security policy') ||
+          e.toString().contains('42501')) {
+        errorMessage = '🚨 RLS 정책 문제!\nSupabase 대시보드에서 관리자 정책을 추가해주세요.';
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '❌ $errorMessage\n과목: "$originalName" → "$newSubjectName"',
+          ),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 5),
+        ),
+      );
+    }
   }
 
   void _deleteSubject(int index) {
@@ -275,12 +581,7 @@ class _SubjectManagementTabState extends State<SubjectManagementTab> {
             child: const Text('취소'),
           ),
           ElevatedButton(
-            onPressed: () {
-              setState(() {
-                _subjects.removeAt(index);
-              });
-              Navigator.pop(context);
-            },
+            onPressed: () => _performDeleteSubject(index),
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.red,
               foregroundColor: Colors.white,
@@ -290,6 +591,68 @@ class _SubjectManagementTabState extends State<SubjectManagementTab> {
         ],
       ),
     );
+  }
+
+  Future<void> _performDeleteSubject(int index) async {
+    final subject = _subjects[index];
+    final subjectName = subject['name'];
+
+    debugPrint('🔥 DELETE DEBUG: 삭제 시작');
+    debugPrint('🔥 DELETE DEBUG: index = $index');
+    debugPrint('🔥 DELETE DEBUG: subject = $subject');
+    debugPrint('🔥 DELETE DEBUG: subject_id = ${subject["id"]}');
+    debugPrint(
+      '🔥 DELETE DEBUG: subject_id_type = ${subject["id"].runtimeType}',
+    );
+
+    Navigator.pop(context);
+
+    try {
+      // Supabase에서 삭제
+      debugPrint('🔥 DELETE DEBUG: Supabase 삭제 시도...');
+      final result = await _supabase
+          .from('subjects')
+          .delete()
+          .eq('id', subject['id']);
+
+      debugPrint('🔥 DELETE DEBUG: Supabase 응답: $result');
+      debugPrint('🔥 DELETE DEBUG: 삭제 성공!');
+
+      // 로컬 상태에서 삭제
+      setState(() {
+        _subjects.removeAt(index);
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('✅ 과목 "$subjectName"이 Supabase에서 삭제되었습니다!'),
+          backgroundColor: Colors.green,
+        ),
+      );
+
+      debugPrint(
+        '🔧 DEBUG: 과목 삭제 완료: $subjectName, 남은 개수: ${_subjects.length}',
+      );
+    } catch (e) {
+      debugPrint('🔥 DELETE DEBUG: 오류 발생!');
+      debugPrint('🔥 DELETE DEBUG: 오류 타입: ${e.runtimeType}');
+      debugPrint('🔥 DELETE DEBUG: 오류 내용: $e');
+      debugPrint('🔥 DELETE DEBUG: 오류 문자열: ${e.toString()}');
+
+      String errorMessage = '데이터베이스 삭제 실패';
+      if (e.toString().contains('row-level security policy') ||
+          e.toString().contains('42501')) {
+        errorMessage = '🚨 RLS 정책 문제!\nSupabase 대시보드에서 관리자 정책을 추가해주세요.';
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('❌ $errorMessage\n과목: "$subjectName"'),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 5),
+        ),
+      );
+    }
   }
 }
 
@@ -463,8 +826,9 @@ class _ContentManagementTabState extends State<ContentManagementTab> {
   String _formatFileSize(int bytes) {
     if (bytes < 1024) return '${bytes}B';
     if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)}KB';
-    if (bytes < 1024 * 1024 * 1024)
+    if (bytes < 1024 * 1024 * 1024) {
       return '${(bytes / (1024 * 1024)).toStringAsFixed(1)}MB';
+    }
     return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)}GB';
   }
 
@@ -863,7 +1227,7 @@ class _PermissionManagementTabState extends State<PermissionManagementTab> {
                 ),
                 const SizedBox(height: 16),
                 DropdownButtonFormField<String>(
-                  value: selectedRole,
+                  initialValue: selectedRole,
                   decoration: const InputDecoration(
                     labelText: '역할',
                     border: OutlineInputBorder(),

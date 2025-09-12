@@ -21,5 +21,6 @@ echo "  - SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY:0:20}..."
 
 flutter run -d chrome \
   --web-port=5173 \
+  --no-devtools \
   --dart-define=SUPABASE_URL=$SUPABASE_URL \
   --dart-define=SUPABASE_ANON_KEY=$SUPABASE_ANON_KEY
